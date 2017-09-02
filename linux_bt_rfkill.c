@@ -17,7 +17,7 @@
 */
 
 #include "config.h"
-#include "linux_rfkill.h"
+#include "linux_bt_rfkill.h"
 
 #ifdef SYS_LINUX
 
@@ -26,7 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 
-int linux_sys_get_rfkill(const char *interface, unsigned int rfkill_type) {
+int linux_sys_get_bt_rfkill(const char *interface, unsigned int rfkill_type) {
     DIR *devdir;
     struct dirent *devfile;
     char dirpath[2048];
@@ -39,7 +39,7 @@ int linux_sys_get_rfkill(const char *interface, unsigned int rfkill_type) {
 
     int r;
 
-    snprintf(dirpath, 2048, "/sys/class/net/%s/phy80211/", interface);
+    snprintf(dirpath, 2048, "/sys/class/bluetooth/%s/", interface);
 
     if ((devdir = opendir(dirpath)) == NULL)
         return -1;
@@ -49,7 +49,7 @@ int linux_sys_get_rfkill(const char *interface, unsigned int rfkill_type) {
             continue;
 
         if (strncmp(devfile->d_name, rfkill_key, strlen(rfkill_key)) == 0) {
-            snprintf(dirpath, 2048, "/sys/class/net/%s/phy80211/%s/%s",
+            snprintf(dirpath, 2048, "/sys/class/bluetooth/%s/%s/%s",
                     interface, devfile->d_name, 
                     rfkill_type == 0 ? hard_key : soft_key);
 
@@ -83,7 +83,7 @@ int linux_sys_clear_rfkill(const char *interface) {
 
     FILE *killf;
 
-    snprintf(dirpath, 2048, "/sys/class/net/%s/phy80211/", interface);
+    snprintf(dirpath, 2048, "/sys/class/bluetooth/%s/", interface);
 
     if ((devdir = opendir(dirpath)) == NULL)
         return -1;
@@ -93,7 +93,7 @@ int linux_sys_clear_rfkill(const char *interface) {
             continue;
 
         if (strncmp(devfile->d_name, rfkill_key, strlen(rfkill_key)) == 0) {
-            snprintf(dirpath, 2048, "/sys/class/net/%s/phy80211/%s/soft",
+            snprintf(dirpath, 2048, "/sys/class/bluetooth/%s/%s/soft",
                     interface, devfile->d_name);
 
             if ((killf = fopen(dirpath, "w")) == NULL) {
@@ -116,6 +116,5 @@ int linux_sys_clear_rfkill(const char *interface) {
 
     return -1;
 }
-
 
 #endif

@@ -16,8 +16,8 @@
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
-#ifndef __LINUX_RFKILL_H__
-#define __LINUX_RFKILL_H__
+#ifndef __LINUX_BT_RFKILL_H__
+#define __LINUX_BT_RFKILL_H__
 
 #include "config.h"
 
@@ -25,8 +25,7 @@
 
 /* Fetch if rfkill is enabled on an interface 
  *
- * This uses the /sys filesystem to query mac80211 drivers to see if the rfkill
- * attributes are enabled.
+ * This uses the /sys filesystem to query the rfkill attribute.
  *
  * rfkill_type == 0 checks hard kill
  * rfkill_type == 1 checks soft kill
@@ -36,21 +35,17 @@
  *  0   Rfkill not enabled
  *  1   Rfkill enabled
  */
-#define LINUX_RFKILL_TYPE_HARD  0
-#define LINUX_RFKILL_TYPE_SOFT  1
-int linux_sys_get_rfkill(const char *interface, unsigned int rfkill_type);
+#define LINUX_BT_RFKILL_TYPE_HARD  0
+#define LINUX_BT_RFKILL_TYPE_SOFT  1
+int linux_sys_get_bt_rfkill(const char *interface, unsigned int rfkill_type);
 
-/* Disable soft rfkill on an interface
- *
- * This uses the /sys filesystem to query mac80211 drivers and clear the rfkill
- *
- * This only disables softkill as we cannot alter hard kill from sw
+/* Disable soft rfkill on an interface if possible, can only disable soft rfkill
  *
  * Returns:
  * -1   Error, cannot change rfkill
  *  0   Success
  */
-int linux_sys_clear_rfkill(const char *interface);
+int linux_sys_clear_bt_rfkill(const char *interface);
 
 #endif
 

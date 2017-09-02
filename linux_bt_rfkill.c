@@ -74,7 +74,7 @@ int linux_sys_get_bt_rfkill(const char *interface, unsigned int rfkill_type) {
     return -1;
 }
 
-int linux_sys_clear_rfkill(const char *interface) {
+int linux_sys_clear_bt_rfkill(const char *interface) {
     DIR *devdir;
     struct dirent *devfile;
     char dirpath[2048];

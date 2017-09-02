@@ -5,6 +5,7 @@ MONITOR_OBJS = \
 	gdbus/object.c.o \
 	gdbus/polkit.c.o \
 	gdbus/watch.c.o \
+	linux_rfkill.c.o \
 	bluez-monitor.c.o
 MONITOR_BIN = bluez-monitor
 

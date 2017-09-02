@@ -1,0 +1,4 @@
+
+#define HAVE_LINUX_WIRELESS 1
+#define SYS_LINUX 1
+

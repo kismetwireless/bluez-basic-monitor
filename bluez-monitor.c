@@ -127,6 +127,13 @@ static void dbus_property_changed(GDBusProxy *proxy, const char *name,
     }
 }
 
+static void dbus_client_ready(GDBusClient *client, void *user_data) {
+    const char *method = "StartDiscovery";
+
+    fprintf(stderr, "debug - client ready\n");
+
+}
+
 int main(int argc, char *argv[]) {
     GError *error = NULL;
     GDBusClient *client;
@@ -140,7 +147,7 @@ int main(int argc, char *argv[]) {
     g_dbus_client_set_proxy_handlers(client, dbus_proxy_added, 
             dbus_proxy_removed, dbus_property_changed, NULL);
 
-    g_dbus_client_set_ready_watch(client, NULL, NULL);
+    g_dbus_client_set_ready_watch(client, dbus_client_ready, NULL);
 
     g_main_loop_run(main_loop);
 

@@ -21,6 +21,8 @@
  *
  */
 
+#include "config.h"
+
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
@@ -33,6 +35,12 @@
 #include <glib.h>
 
 #include "gdbus/gdbus.h"
+
+#include "linux_bt_rfkill.h"
+
+/* Target interface */
+const char *bt_interface;
+const char *bt_interface_address;
 
 static GMainLoop *main_loop;
 static DBusConnection *dbus_connection;
@@ -137,6 +145,35 @@ static void dbus_client_ready(GDBusClient *client, void *user_data) {
 int main(int argc, char *argv[]) {
     GError *error = NULL;
     GDBusClient *client;
+
+    if (argc < 2) {
+        fprintf(stderr, "FATAL - expected %s [interface]\n", argv[0]);
+        exit(1);
+    }
+
+    bt_interface = strdup(argv[1]);
+
+    fprintf(stderr, "DEBUG - Targetting interface %s\n", bt_interface);
+
+    if (linux_sys_get_bt_rfkill(bt_interface, LINUX_BT_RFKILL_TYPE_HARD)) {
+        fprintf(stderr, "FATAL - %s rfkill hardkill blocked\n", bt_interface);
+        exit(1);
+    } else {
+        fprintf(stderr, "DEBUG - %s rfkill hardkill unblocked\n", bt_interface);
+    }
+
+    if (linux_sys_get_bt_rfkill(bt_interface, LINUX_BT_RFKILL_TYPE_SOFT)) {
+        fprintf(stderr, "DEBUG - %s rfkill softkill blocked\n", bt_interface);
+
+        if (linux_sys_clear_bt_rfkill(bt_interface) < 0) {
+            fprintf(stderr, "DEBUG - %s rfkill softkill, could not unblock", bt_interface);
+            exit(1);
+        }
+    } else {
+        fprintf(stderr, "DEBUG - %s rfkill softkill unblocked\n", bt_interface);
+    }
+
+
 
     main_loop = g_main_loop_new(NULL, FALSE);
     dbus_connection = g_dbus_setup_bus(DBUS_BUS_SYSTEM, NULL, NULL);

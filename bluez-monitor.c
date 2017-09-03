@@ -186,7 +186,29 @@ static void dbus_initiate_adapter_poweron(GDBusProxy *proxy) {
     }
 }
 
+/* Called when devices change; grab info about the device and print it out */
+static void dbus_bt_device(GDBusProxy *proxy) {
+    DBusMessageIter iter;
 
+    const char *name = NULL;
+    const char *address = NULL;
+    dbus_int16_t rssi = 0;
+
+    if (g_dbus_proxy_get_property(proxy, "Address", &iter))
+        dbus_message_iter_get_basic(&iter, &address);
+
+    if (g_dbus_proxy_get_property(proxy, "Name", &iter))
+        dbus_message_iter_get_basic(&iter, &name);
+
+    if (g_dbus_proxy_get_property(proxy, "RSSI", &iter))
+        dbus_message_iter_get_basic(&iter, &rssi);
+
+    fprintf(stderr, "DEVICE - %s (%s) %d\n", address, name, rssi);
+
+}
+
+/* Called whenever a dbus entity is connected (specifically, adapter and 
+ * device) */
 static void dbus_proxy_added(GDBusProxy *proxy, void *user_data) {
     const char *interface;
     DBusMessageIter iter;
@@ -195,14 +217,12 @@ static void dbus_proxy_added(GDBusProxy *proxy, void *user_data) {
     interface = g_dbus_proxy_get_interface(proxy);
 
     if (!strcmp(interface, "org.bluez.Device1")) {
-        fprintf(stderr, "debug - proxy - device added\n");
+        dbus_bt_device(proxy);
     } else if (!strcmp(interface, "org.bluez.Adapter1")) {
         /* We've been notified there's a new adapter; we need to compare it to our
          * desired adapter, see if it has scan enabled, and enable scan if it
          * doesn't
          */
-
-        fprintf(stderr, "debug - adapter added\n");
 
         /* Fetch address */
         if (g_dbus_proxy_get_property(proxy, "Address", &iter)) {
@@ -236,17 +256,36 @@ static void dbus_proxy_added(GDBusProxy *proxy, void *user_data) {
     }
 }
 
+/* Called when an entity is removed; if we lose our primary adapter we're
+ * going to have a bad time */
 static void dbus_proxy_removed(GDBusProxy *proxy, void *user_data) {
     const char *interface;
+    DBusMessageIter iter;
+    const char *address;
 
     interface = g_dbus_proxy_get_interface(proxy);
 
     if (!strcmp(interface, "org.bluez.Device1")) {
-        // device_removed(proxy);
         fprintf(stderr, "debug - proxy - device removed\n");
     } else if (!strcmp(interface, "org.bluez.Adapter1")) {
-        // adapter_removed(proxy);
         fprintf(stderr, "debug - proxy - adapter removed\n");
+
+        /* Fetch address */
+        if (g_dbus_proxy_get_property(proxy, "Address", &iter)) {
+            dbus_message_iter_get_basic(&iter, &address);
+
+            fprintf(stderr, "   adapter %s\n", address);
+
+            /* Compare to the address we extracted for the hciX */
+            if (strcmp(address, bt_interface_address)) {
+                fprintf(stderr, "DEBUG - Got adapter %s but we want %s, skipping\n",
+                        address, bt_interface_address);
+                return;
+            }
+
+            fprintf(stderr, "FATAL - Adapter we care about removed!\n");
+            exit(1);
+        }
     }
 }
 
@@ -258,15 +297,7 @@ static void dbus_property_changed(GDBusProxy *proxy, const char *name,
     interface = g_dbus_proxy_get_interface(proxy);
 
     if (!strcmp(interface, "org.bluez.Device1")) {
-        DBusMessageIter addr_iter;
-        char *str;
-
-        if (g_dbus_proxy_get_property(proxy, "Address", &addr_iter) == TRUE) {
-            const char *address;
-            dbus_message_iter_get_basic(&addr_iter, &address);
-
-            fprintf(stderr, "debug - property changed device addr %s\n", address);
-        } 
+        dbus_bt_device(proxy);
     } else if (!strcmp(interface, "org.bluez.Adapter1")) {
         DBusMessageIter addr_iter;
         char *str;

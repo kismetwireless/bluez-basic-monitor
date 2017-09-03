@@ -31,10 +31,14 @@
 #include <signal.h>
 #include <sys/signalfd.h>
 #include <string.h>
+#include <sys/ioctl.h>
 
 #include <glib.h>
 
 #include "gdbus/gdbus.h"
+
+#include "bluetooth.h"
+#include "hci.h"
 
 #include "linux_bt_rfkill.h"
 
@@ -76,17 +80,76 @@ static void handle_device(GDBusProxy *proxy, const char *description) {
     fprintf(stderr, "DEBUG - device address %s alias %s\n", address, alias);
 }
 
+static void dbus_adapter_scan_reply(DBusMessage *message, void *user_data) {
+    DBusError error;
+    dbus_bool_t enable = GPOINTER_TO_UINT(user_data);
+
+    dbus_error_init(&error);
+
+    if (dbus_set_error_from_message(&error, message) == TRUE) {
+        fprintf(stderr, "FATAL - Failed to initiate discovery: %s\n", error.name);
+        dbus_error_free(&error);
+        exit(1);
+    }
+
+    fprintf(stderr, "DEBUG - Discovery initiated: %s\n", enable == TRUE ? "true" : "false");
+}
+
+static void dbus_initiate_adapter_scan(GDBusProxy *proxy) {
+    const char *method = "StartDiscovery";
+    dbus_bool_t enable;
+
+    fprintf(stderr, "debug - starting scan mode\n");
+
+    if (g_dbus_proxy_method_call(proxy, method, NULL,
+                dbus_adapter_scan_reply, GUINT_TO_POINTER(enable), NULL) == FALSE) {
+        fprintf(stderr, "FATAL - Failed to initiate discovery\n");
+        exit(1);
+    }
+}
+
 static void dbus_proxy_added(GDBusProxy *proxy, void *user_data) {
     const char *interface;
+    DBusMessageIter iter;
+    const char *address;
+    dbus_bool_t scan_enabled;
 
     interface = g_dbus_proxy_get_interface(proxy);
 
     if (!strcmp(interface, "org.bluez.Device1")) {
-        // device_added(proxy);
         fprintf(stderr, "debug - proxy - device added\n");
     } else if (!strcmp(interface, "org.bluez.Adapter1")) {
-        // adapter_added(proxy);
+        /* We've been notified there's a new adapter; we need to compare it to our
+         * desired adapter, see if it has scan enabled, and enable scan if it
+         * doesn't
+         */
+
         fprintf(stderr, "debug - adapter added\n");
+
+        if (g_dbus_proxy_get_property(proxy, "Address", &iter)) {
+            dbus_message_iter_get_basic(&iter, &address);
+
+            fprintf(stderr, "   adapter %s\n", address);
+
+            if (strcmp(address, bt_interface_address)) {
+                fprintf(stderr, "DEBUG - Got adapter %s but we want %s, skipping\n",
+                        address, bt_interface_address);
+                return;
+            }
+
+            if (!g_dbus_proxy_get_property(proxy, "Discovering", &iter)) {
+                fprintf(stderr, "FATAL - Adapter doesn't have 'Discovering' attribute\n");
+                exit(1);
+            }
+
+            dbus_message_iter_get_basic(&iter, &scan_enabled);
+
+            if (scan_enabled) {
+                fprintf(stderr, "DEBUG - Scan already enabled\n");
+            } else {
+                dbus_initiate_adapter_scan(proxy);
+            }
+        }
     }
 }
 
@@ -145,6 +208,10 @@ static void dbus_client_ready(GDBusClient *client, void *user_data) {
 int main(int argc, char *argv[]) {
     GError *error = NULL;
     GDBusClient *client;
+    int hci_sock;
+    int devid;
+    static struct hci_dev_info di;
+    char bdaddr[18];
 
     if (argc < 2) {
         fprintf(stderr, "FATAL - expected %s [interface]\n", argv[0]);
@@ -154,6 +221,32 @@ int main(int argc, char *argv[]) {
     bt_interface = strdup(argv[1]);
 
     fprintf(stderr, "DEBUG - Targetting interface %s\n", bt_interface);
+
+    if ((hci_sock = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI)) < 0) {
+        fprintf(stderr, "FATAL - %s couldn't create HCI socket: %s\n", 
+                bt_interface, strerror(errno));
+        exit(1);
+    }
+
+    if (sscanf(bt_interface, "hci%u", &devid) != 1) {
+        fprintf(stderr, "FATAL - %s couldn't parse device id\n", bt_interface);
+        exit(1);
+    }
+
+    if (ioctl(hci_sock, HCIGETDEVINFO, (void *) &di)) {
+        fprintf(stderr, "FATAL - %s couldn't get device info\n", bt_interface);
+        exit(1);
+    }
+
+    snprintf(bdaddr, 18, "%2.2X:%2.2X:%2.2X:%2.2X:%2.2X:%2.2X",
+            di.bdaddr.b[5], di.bdaddr.b[4], di.bdaddr.b[3],
+            di.bdaddr.b[2], di.bdaddr.b[1], di.bdaddr.b[0]);
+
+    fprintf(stderr, "DEBUG - %s %s\n", bt_interface, bdaddr);
+
+    bt_interface_address = strdup(bdaddr);
+
+    close(hci_sock);
 
     if (linux_sys_get_bt_rfkill(bt_interface, LINUX_BT_RFKILL_TYPE_HARD)) {
         fprintf(stderr, "FATAL - %s rfkill hardkill blocked\n", bt_interface);
@@ -172,7 +265,6 @@ int main(int argc, char *argv[]) {
     } else {
         fprintf(stderr, "DEBUG - %s rfkill softkill unblocked\n", bt_interface);
     }
-
 
 
     main_loop = g_main_loop_new(NULL, FALSE);

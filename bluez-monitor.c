@@ -80,9 +80,38 @@ static void handle_device(GDBusProxy *proxy, const char *description) {
     fprintf(stderr, "DEBUG - device address %s alias %s\n", address, alias);
 }
 
+static dbus_bool_t dbus_adapter_is_powered(GDBusProxy *proxy) {
+    DBusMessageIter iter;
+    dbus_bool_t iter_bool;
+
+    /* Make sure the interface is powered on */
+    if (!g_dbus_proxy_get_property(proxy, "Powered", &iter)) {
+        fprintf(stderr, "ERROR - Adapter doesn't have 'Powered' attribute\n");
+        return FALSE;
+    }
+
+    dbus_message_iter_get_basic(&iter, &iter_bool);
+
+    return iter_bool;
+}
+
+static dbus_bool_t dbus_adapter_is_scanning(GDBusProxy *proxy) {
+    DBusMessageIter iter;
+    dbus_bool_t iter_bool;
+
+    /* Make sure the interface is powered on */
+    if (!g_dbus_proxy_get_property(proxy, "Discovering", &iter)) {
+        fprintf(stderr, "ERROR - Adapter doesn't have 'Discovering' attribute\n");
+        return FALSE;
+    }
+
+    dbus_message_iter_get_basic(&iter, &iter_bool);
+
+    return iter_bool;
+}
+
 static void dbus_adapter_scan_reply(DBusMessage *message, void *user_data) {
     DBusError error;
-    dbus_bool_t enable = GPOINTER_TO_UINT(user_data);
 
     dbus_error_init(&error);
 
@@ -92,27 +121,56 @@ static void dbus_adapter_scan_reply(DBusMessage *message, void *user_data) {
         exit(1);
     }
 
-    fprintf(stderr, "DEBUG - Discovery initiated: %s\n", enable == TRUE ? "true" : "false");
+    fprintf(stderr, "DEBUG - Discovery initiated\n");
 }
 
 static void dbus_initiate_adapter_scan(GDBusProxy *proxy) {
     const char *method = "StartDiscovery";
-    dbus_bool_t enable;
 
     fprintf(stderr, "debug - starting scan mode\n");
 
     if (g_dbus_proxy_method_call(proxy, method, NULL,
-                dbus_adapter_scan_reply, GUINT_TO_POINTER(enable), NULL) == FALSE) {
+                dbus_adapter_scan_reply, NULL, NULL) == FALSE) {
         fprintf(stderr, "FATAL - Failed to initiate discovery\n");
         exit(1);
     }
 }
 
+static void dbus_adapter_poweron_reply(const DBusError *error, void *user_data) {
+    GDBusProxy *proxy = (GDBusProxy *) user_data;
+
+    if (dbus_error_is_set(error)) {
+        fprintf(stderr, "FATAL - Failed to turn on power: %s\n", error->name);
+        exit(1);
+    }
+
+    fprintf(stderr, "DEBUG - Interface powered on\n");
+
+    /* Do we need to enable scanning mode?  We probably do */
+    if (dbus_adapter_is_scanning(proxy)) {
+        fprintf(stderr, "DEBUG - Powered on interface is already scanning\n");
+    } else {
+        dbus_initiate_adapter_scan(proxy);
+    }
+}
+
+static void dbus_initiate_adapter_poweron(GDBusProxy *proxy) {
+    dbus_bool_t powered = TRUE;
+
+    fprintf(stderr, "debug - turning on power\n");
+
+    if (g_dbus_proxy_set_property_basic(proxy, "Powered", DBUS_TYPE_BOOLEAN, &powered,
+                dbus_adapter_poweron_reply, proxy, NULL) == FALSE) {
+        fprintf(stderr, "FATAL - Failed to turn on power\n");
+        exit(1);
+    }
+}
+
+
 static void dbus_proxy_added(GDBusProxy *proxy, void *user_data) {
     const char *interface;
     DBusMessageIter iter;
     const char *address;
-    dbus_bool_t scan_enabled;
 
     interface = g_dbus_proxy_get_interface(proxy);
 
@@ -126,26 +184,31 @@ static void dbus_proxy_added(GDBusProxy *proxy, void *user_data) {
 
         fprintf(stderr, "debug - adapter added\n");
 
+        /* Fetch address */
         if (g_dbus_proxy_get_property(proxy, "Address", &iter)) {
             dbus_message_iter_get_basic(&iter, &address);
 
             fprintf(stderr, "   adapter %s\n", address);
 
+            /* Compare to the address we extracted for the hciX */
             if (strcmp(address, bt_interface_address)) {
                 fprintf(stderr, "DEBUG - Got adapter %s but we want %s, skipping\n",
                         address, bt_interface_address);
                 return;
             }
 
-            if (!g_dbus_proxy_get_property(proxy, "Discovering", &iter)) {
-                fprintf(stderr, "FATAL - Adapter doesn't have 'Discovering' attribute\n");
-                exit(1);
-            }
+            /* See if adapter is powered on; if not, power it on, we'll enable
+             * scanning in the poweron completion */
+            if (dbus_adapter_is_powered(proxy)) {
+                fprintf(stderr, "DEBUG - Adapter is already powered on\n");
+            } else {
+                dbus_initiate_adapter_poweron(proxy);
+                return;
+            } 
 
-            dbus_message_iter_get_basic(&iter, &scan_enabled);
-
-            if (scan_enabled) {
-                fprintf(stderr, "DEBUG - Scan already enabled\n");
+            /* See if adapter is already scanning; if not, enable scanning */
+            if (dbus_adapter_is_scanning(proxy)) {
+                fprintf(stderr, "DEBUG - Adapter is already scanning\n");
             } else {
                 dbus_initiate_adapter_scan(proxy);
             }

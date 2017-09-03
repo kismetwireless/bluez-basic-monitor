@@ -46,6 +46,10 @@
 const char *bt_interface;
 const char *bt_interface_address;
 
+/* Are we already controlling it */
+int state_powering_on = 0;
+int state_scanning_on = 0;
+
 static GMainLoop *main_loop;
 static DBusConnection *dbus_connection;
 
@@ -55,7 +59,6 @@ struct gdbus_bluez_adapter {
     GDBusProxy *proxy;
     GList *devices;
 };
-
 
 static void connect_handler(DBusConnection *connection, void *user_data) {
     fprintf(stderr, "DEBUG - connect_handler\n");
@@ -115,19 +118,28 @@ static void dbus_adapter_scan_reply(DBusMessage *message, void *user_data) {
 
     dbus_error_init(&error);
 
+    state_scanning_on = 0;
+
     if (dbus_set_error_from_message(&error, message) == TRUE) {
         fprintf(stderr, "FATAL - Failed to initiate discovery: %s\n", error.name);
         dbus_error_free(&error);
         exit(1);
     }
 
-    fprintf(stderr, "DEBUG - Discovery initiated\n");
+    fprintf(stderr, "DEBUG - Discovery turned on\n");
 }
 
 static void dbus_initiate_adapter_scan(GDBusProxy *proxy) {
     const char *method = "StartDiscovery";
 
-    fprintf(stderr, "debug - starting scan mode\n");
+    if (state_scanning_on) {
+        fprintf(stderr, "DEBUG - Already trying to turn on discovery mode\n");
+        return;
+    }
+
+    state_scanning_on = 1;
+
+    fprintf(stderr, "DEBUG - Starting discovery mode\n");
 
     if (g_dbus_proxy_method_call(proxy, method, NULL,
                 dbus_adapter_scan_reply, NULL, NULL) == FALSE) {
@@ -138,6 +150,8 @@ static void dbus_initiate_adapter_scan(GDBusProxy *proxy) {
 
 static void dbus_adapter_poweron_reply(const DBusError *error, void *user_data) {
     GDBusProxy *proxy = (GDBusProxy *) user_data;
+
+    state_powering_on = 0;
 
     if (dbus_error_is_set(error)) {
         fprintf(stderr, "FATAL - Failed to turn on power: %s\n", error->name);
@@ -157,7 +171,13 @@ static void dbus_adapter_poweron_reply(const DBusError *error, void *user_data) 
 static void dbus_initiate_adapter_poweron(GDBusProxy *proxy) {
     dbus_bool_t powered = TRUE;
 
-    fprintf(stderr, "debug - turning on power\n");
+    if (state_powering_on) {
+        fprintf(stderr, "DEBUG - Already trying to turn on power\n");
+        return;
+    }
+
+    state_powering_on = 1;
+    fprintf(stderr, "DEBUG - Turning on power\n");
 
     if (g_dbus_proxy_set_property_basic(proxy, "Powered", DBUS_TYPE_BOOLEAN, &powered,
                 dbus_adapter_poweron_reply, proxy, NULL) == FALSE) {
@@ -257,6 +277,29 @@ static void dbus_property_changed(GDBusProxy *proxy, const char *name,
             dbus_message_iter_get_basic(&addr_iter, &address);
 
             fprintf(stderr, "debug - controller changed %s\n", address);
+
+            /* Is this the adapter we care about? */
+            if (strcmp(address, bt_interface_address)) {
+                fprintf(stderr, "DEBUG - Got adapter %s but we want %s, skipping\n",
+                        address, bt_interface_address);
+                return;
+            }
+
+            /* See if adapter is powered on; if not, power it on, we'll enable
+             * scanning in the poweron completion */
+            if (dbus_adapter_is_powered(proxy)) {
+                fprintf(stderr, "DEBUG - Adapter is already powered on\n");
+            } else {
+                dbus_initiate_adapter_poweron(proxy);
+                return;
+            } 
+
+            /* See if adapter is already scanning; if not, enable scanning */
+            if (dbus_adapter_is_scanning(proxy)) {
+                fprintf(stderr, "DEBUG - Adapter is already scanning\n");
+            } else {
+                dbus_initiate_adapter_scan(proxy);
+            }
         }
     }
 }

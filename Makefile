@@ -9,11 +9,11 @@ MONITOR_OBJS = \
 	bluez-monitor.c.o
 MONITOR_BIN = bluez-monitor
 
-CC ?= gcc
-LD ?= gcc
-CFLAGS ?= -I. `pkg-config glib-2.0 --cflags` `pkg-config dbus-glib-1 --cflags`
-LDFLAGS ?= 
-LIBS ?= `pkg-config glib-2.0 --libs` `pkg-config dbus-glib-1 --libs` -ldl
+CC = gcc
+LD = gcc
+CFLAGS = -I. `pkg-config glib-2.0 --cflags` `pkg-config dbus-glib-1 --cflags`
+LDFLAGS = 
+LIBS = `pkg-config glib-2.0 --libs` `pkg-config dbus-glib-1 --libs` -ldl
 
 all: $(MONITOR_BIN)
 

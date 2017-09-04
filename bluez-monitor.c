@@ -53,36 +53,6 @@ int state_scanning_on = 0;
 static GMainLoop *main_loop;
 static DBusConnection *dbus_connection;
 
-static GDBusProxy *agent_manager;
-
-struct gdbus_bluez_adapter {
-    GDBusProxy *proxy;
-    GList *devices;
-};
-
-static void connect_handler(DBusConnection *connection, void *user_data) {
-    fprintf(stderr, "DEBUG - connect_handler\n");
-}
-
-static void handle_device(GDBusProxy *proxy, const char *description) {
-    DBusMessageIter iter;
-    const char *address, *alias;
-
-    if (!g_dbus_proxy_get_property(proxy, "Address", &iter)) {
-        return;
-    }
-
-    dbus_message_iter_get_basic(&iter, &address);
-
-    if (g_dbus_proxy_get_property(proxy, "Alias", &iter)) {
-        dbus_message_iter_get_basic(&iter, &alias);
-    } else {
-        alias = NULL;
-    }
-
-    fprintf(stderr, "DEBUG - device address %s alias %s\n", address, alias);
-}
-
 static dbus_bool_t dbus_adapter_is_powered(GDBusProxy *proxy) {
     DBusMessageIter iter;
     dbus_bool_t iter_bool;

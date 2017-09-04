@@ -370,6 +370,8 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
+    di.dev_id = devid;
+
     if (ioctl(hci_sock, HCIGETDEVINFO, (void *) &di)) {
         fprintf(stderr, "FATAL - %s couldn't get device info\n", bt_interface);
         exit(1);

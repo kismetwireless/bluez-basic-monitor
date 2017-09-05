@@ -158,7 +158,7 @@ static void dbus_initiate_adapter_poweron(GDBusProxy *proxy) {
 
 /* Called when devices change; grab info about the device and print it out */
 static void dbus_bt_device(GDBusProxy *proxy) {
-    DBusMessageIter iter;
+    DBusMessageIter iter, value;
 
     const char *name = NULL;
     const char *address = NULL;
@@ -173,7 +173,24 @@ static void dbus_bt_device(GDBusProxy *proxy) {
     if (g_dbus_proxy_get_property(proxy, "RSSI", &iter))
         dbus_message_iter_get_basic(&iter, &rssi);
 
+    if (rssi == 0)
+        return;
+
     fprintf(stderr, "DEVICE - %s (%s) %d\n", address, name, rssi);
+
+    if (g_dbus_proxy_get_property(proxy, "UUIDs", &iter)) {
+        dbus_message_iter_recurse(&iter, &value);
+
+        while (dbus_message_iter_get_arg_type(&value) == DBUS_TYPE_STRING) {
+            const char *uuid, *text;
+
+            dbus_message_iter_get_basic(&value, &uuid);
+
+            fprintf(stderr, "    UUID %s\n", uuid);
+
+            dbus_message_iter_next(&value);
+        }
+    }
 
 }
 

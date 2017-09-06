@@ -10,6 +10,10 @@ MONITOR_OBJS = \
 MONITOR_BIN = bluez-monitor
 
 MGMT_OBJS = \
+	mgmtlib/bluetooth.c.o \
+	mgmtlib/hci.c.o \
+	mgmtlib/sdp.c.o \
+	mgmtlib/uuid.c.o \
 	linux_bt_rfkill.c.o \
 	bluez-mgmtsock.c.o
 MGMT_BIN = bluez-monitor-mgmtsock

@@ -37,8 +37,8 @@
 
 #include "gdbus/gdbus.h"
 
-#include "bluetooth.h"
-#include "hci.h"
+#include "mgmtlib/bluetooth.h"
+#include "mgmtlib/hci.h"
 
 #include "linux_bt_rfkill.h"
 

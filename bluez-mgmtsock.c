@@ -78,7 +78,6 @@ void bdaddr_to_string(const uint8_t *bdaddr, char *str) {
             bdaddr[2], bdaddr[1], bdaddr[0]);
 }
 
-
 /* Connect to the bluez management system */
 int mgmt_connect() {
     int fd;
@@ -171,6 +170,12 @@ void resp_controller_info(local_bluetooth_t *localbt, uint8_t status, uint16_t l
     bdaddr_to_string(rp->bdaddr.b, bdaddr);
 
     fprintf(stderr, "INTERFACE - Got interface info for %s\n", bdaddr);
+
+    if (rp->supported_settings & MGMT_SETTING_BREDR) 
+        fprintf(stderr, "    Supports EDR/SDR\n");
+    if (rp->supported_settings & MGMT_SETTING_LE) 
+        fprintf(stderr, "    Supports BTLE\n");
+
 
 }
 

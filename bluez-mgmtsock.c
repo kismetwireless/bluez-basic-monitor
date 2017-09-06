@@ -55,6 +55,9 @@ typedef struct {
 
     /* Read ringbuf */
     kis_simple_ringbuf_t *read_rbuf;
+
+    /* Scanning type */
+    uint8_t scan_type;
 } local_bluetooth_t;
 
 #define SCAN_TYPE_BREDR (1 << BDADDR_BREDR)
@@ -141,11 +144,11 @@ int mgmt_write_request(int mgmt_fd, uint16_t opcode, uint16_t index,
 }
 
 /* Initiate finding a device */
-int cmd_start_discovery(local_bluetooth_t *localbt, uint8_t scan_type) {
+int cmd_start_discovery(local_bluetooth_t *localbt) {
     struct mgmt_cp_start_discovery cp;
 
     memset(&cp, 0, sizeof(cp));
-    cp.type = scan_type;
+    cp.type = localbt->scan_type;
 
     return mgmt_write_request(localbt->mgmt_fd, MGMT_OP_START_DISCOVERY, 
             localbt->devid, sizeof(cp), &cp);
@@ -154,6 +157,13 @@ int cmd_start_discovery(local_bluetooth_t *localbt, uint8_t scan_type) {
 /* Probe the controller */
 int cmd_get_controller_info(local_bluetooth_t *localbt) {
     return mgmt_write_request(localbt->mgmt_fd, MGMT_OP_READ_INFO, localbt->devid, 0, NULL);
+}
+
+int cmd_enable_controller(local_bluetooth_t *localbt) {
+    uint8_t val = 0x1;
+
+    return mgmt_write_request(localbt->mgmt_fd, MGMT_OP_SET_POWERED, localbt->devid, 
+            sizeof(val), &val);
 }
 
 /* Handle controller info response */
@@ -171,11 +181,79 @@ void resp_controller_info(local_bluetooth_t *localbt, uint8_t status, uint16_t l
 
     fprintf(stderr, "INTERFACE - Got interface info for %s\n", bdaddr);
 
-    if (rp->supported_settings & MGMT_SETTING_BREDR) 
-        fprintf(stderr, "    Supports EDR/SDR\n");
-    if (rp->supported_settings & MGMT_SETTING_LE) 
-        fprintf(stderr, "    Supports BTLE\n");
+    /* Figure out if we support BDR/EDR and BTLE */
+    if (rp->supported_settings & MGMT_SETTING_BREDR) {
+        fprintf(stderr, "    Supports BR/EDR\n");
+    } else {
+        fprintf(stderr, "    No EDR/SDR support\n");
+        localbt->scan_type &= ~SCAN_TYPE_BREDR;
+    }
 
+    if (rp->supported_settings & MGMT_SETTING_LE) {
+        fprintf(stderr, "    Supports BTLE\n");
+    } else {
+        fprintf(stderr, "    No BTLE support\n");
+        localbt->scan_type &= ~SCAN_TYPE_LE;
+    }
+
+    /* Is it currently powered? */
+    if (rp->current_settings & MGMT_SETTING_POWERED)
+        fprintf(stderr, "    Powered\n");
+    else
+        fprintf(stderr, "    Down\n");
+
+    if (!(rp->current_settings & MGMT_SETTING_POWERED)) {
+        /* If the interface is off, turn it on */
+        fprintf(stderr, "DEBUG - Powering on interface\n");
+        cmd_enable_controller(localbt);
+    } else {
+        /* If the interface is on, start scanning */
+        cmd_start_discovery(localbt);
+    }
+}
+
+void resp_controller_power(local_bluetooth_t *localbt, uint8_t status, uint16_t len,
+        const void *param) {
+    uint32_t *settings = (uint32_t *) param;
+
+    if (len < sizeof(uint32_t)) {
+        fprintf(stderr, "DEBUG - insufficient data in controller power\n");
+        return;
+    }
+
+    if (*settings & MGMT_SETTING_POWERED) {
+        fprintf(stderr, "DEBUG - Interface powered on\n");
+
+        /* Initiate scanning mode */
+        cmd_start_discovery(localbt);
+    } else {
+        fprintf(stderr, "FATAL - Interface was asked to power on and failed\n");
+        exit(1);
+    }
+}
+
+void evt_controller_discovering(local_bluetooth_t *localbt, uint16_t len, const void *param) {
+    struct mgmt_ev_discovering *dsc = (struct mgmt_ev_discovering *) param;
+
+    const char *dsc_type;
+
+    if (len < sizeof(struct mgmt_ev_discovering)) {
+        fprintf(stderr, "DEBUG - insufficient data in discovering event\n");
+        return;
+    }
+
+    if ((dsc->type & SCAN_TYPE_DUAL) == SCAN_TYPE_DUAL) {
+        dsc_type = "BREDR/LE";
+    } else if (dsc->type & SCAN_TYPE_BREDR) {
+        dsc_type = "BDEDR";
+    } else if (dsc->type & SCAN_TYPE_LE) {
+        dsc_type = "BTLE";
+    } else {
+        dsc_type = "NONE";
+    }
+
+    fprintf(stderr, "DISCOVERY - %s - %s\n",
+            dsc->discovering ? "enabled" : "disabled", dsc_type);
 
 }
 
@@ -221,9 +299,16 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
         kis_simple_ringbuf_read(localbt->read_rbuf, NULL, 
                 sizeof(bluez_mgmt_command_t) + rlength);
 
+        /* Ignore events not for us */
+        if (rindex != localbt->devid) {
+            fprintf(stderr, "DEBUG - Got information about an interface we don't care "
+                    "about (hci%u)\n", rindex);
+            continue;
+        }
+
         if (ropcode == MGMT_EV_CMD_COMPLETE) {
             if (rlength < sizeof(struct mgmt_ev_cmd_complete)) {
-                fprintf(stderr, "debug - status response too small for response rec\n");
+                fprintf(stderr, "DEBUG - status response too small for response rec\n");
                 free(evt);
                 continue;
             }
@@ -242,6 +327,11 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
                             rlength - sizeof(struct mgmt_ev_cmd_complete),
                             crec->data);
                     break;
+                case MGMT_OP_SET_POWERED:
+                    resp_controller_power(localbt, crec->status,
+                            rlength - sizeof(struct mgmt_ev_cmd_complete),
+                            crec->data);
+                    break;
                 default:
                     fprintf(stderr, "DEBUG - Unhandled command\n");
             }
@@ -249,6 +339,17 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
             fprintf(stderr, "DEBUG - command status hci%u len %u\n", rindex, rlength);
         } else {
             fprintf(stderr, "DEBUG - event 0x%x hci%u len %u\n", ropcode, rindex, rlength);
+
+            switch (ropcode) {
+                case MGMT_EV_DISCOVERING:
+                    evt_controller_discovering(localbt, 
+                            rlength - sizeof(bluez_mgmt_command_t),
+                            evt->param);
+                    break;
+                default:
+                    fprintf(stderr, "DEBUG - Unhandled event\n");
+
+            }
         }
 
         /* Dump the temp object */
@@ -265,6 +366,7 @@ int main(int argc, char *argv[]) {
         .devid = 0,
         .mgmt_fd = 0,
         .read_rbuf = NULL,
+        .scan_type = SCAN_TYPE_DUAL,
     };
 
     /* Local socket info for extracting MAC address of hci interface */

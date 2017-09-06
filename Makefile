@@ -15,6 +15,7 @@ MGMT_OBJS = \
 	mgmtlib/sdp.c.o \
 	mgmtlib/uuid.c.o \
 	linux_bt_rfkill.c.o \
+	simple_ringbuf_c.c.o \
 	bluez-mgmtsock.c.o
 MGMT_BIN = bluez-monitor-mgmtsock
 

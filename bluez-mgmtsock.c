@@ -262,18 +262,96 @@ void evt_controller_discovering(local_bluetooth_t *localbt, uint16_t len, const 
 
 }
 
+static char *eir_get_name(const uint8_t *eir, uint16_t eir_len) {
+    uint8_t parsed = 0;
+
+    if (eir_len < 2)
+        return NULL;
+
+    while (parsed < eir_len - 1) {
+        uint8_t field_len = eir[0];
+
+        if (field_len == 0)
+            break;
+
+        parsed += field_len + 1;
+
+        if (parsed > eir_len)
+            break;
+
+        /* Check for short of complete name */
+        if (eir[1] == 0x09 || eir[1] == 0x08)
+            return strndup((char *) &eir[2], field_len - 1);
+
+        eir += field_len + 1;
+    }
+
+    return NULL;
+}
+
+static unsigned int eir_get_flags(const uint8_t *eir, uint16_t eir_len) {
+    uint8_t parsed = 0;
+
+    if (eir_len < 2)
+        return 0;
+
+    while (parsed < eir_len - 1) {
+        uint8_t field_len = eir[0];
+
+        if (field_len == 0)
+            break;
+
+        parsed += field_len + 1;
+
+        if (parsed > eir_len)
+            break;
+
+        /* Check for flags */
+        if (eir[1] == 0x01)
+            return eir[2];
+
+        eir += field_len + 1;
+    }
+
+    return 0;
+}
+
+/* Actual device found in scan trigger */
 void evt_device_found(local_bluetooth_t *localbt, uint16_t len, const void *param) {
     struct mgmt_ev_device_found *dev = (struct mgmt_ev_device_found *) param;
     char addr[BDADDR_STR_LEN];
+    uint32_t flags;
+    uint16_t eirlen;
+
+	static const char *str[] = { "BR/EDR", "LE Public", "LE Random" };
+    const char *typestr;
+
+    char *name;
 
     if (len < sizeof(struct mgmt_ev_device_found)) {
         fprintf(stderr, "DEBUG - insufficient data in device event\n");
         return;
     }
 
+    /* Extract the type and make it a string */
+    if (dev->addr.type >= 0 && dev->addr.type < BDADDR_LE_RANDOM)
+        typestr = str[dev->addr.type];
+    else
+        typestr = "UNKNOWN";
+
+    /* Convert the mac */
     bdaddr_to_string(dev->addr.bdaddr.b, addr);
 
-    fprintf(stderr, "DEVICE - %s %d\n", addr, dev->rssi);
+    /* Endian flip the flags */
+    flags = le32toh(dev->flags);
+
+    /* Extract the name from EIR */
+    eirlen = le16toh(dev->eir_len);
+    name = eir_get_name(dev->eir, eirlen);
+
+    fprintf(stderr, "DEVICE - %s (%s) \"%s\" %d\n", addr, typestr, name, dev->rssi);
+
+    free(name);
 }
 
 void handle_mgmt_response(local_bluetooth_t *localbt) {

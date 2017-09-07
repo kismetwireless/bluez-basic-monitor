@@ -511,6 +511,17 @@ int main(int argc, char *argv[]) {
 
     localbt.bt_interface_str_address = strdup(bdaddr);
 
+    /* Reset the interface */
+    fprintf(stderr, "DEBUG - Resetting %s\n", localbt.bt_interface);
+    if (ioctl(hci_sock, HCIDEVDOWN, localbt.devid) < 0) {
+        fprintf(stderr, "DEBUG - Could not reset device %s: %s\n",
+                localbt.bt_interface, strerror(errno));
+    }
+    if (ioctl(hci_sock, HCIDEVUP, localbt.devid) < 0) {
+        fprintf(stderr, "DEBUG - Could not reset device %s: %s\n",
+                localbt.bt_interface, strerror(errno));
+    }
+
     close(hci_sock);
 
     if (linux_sys_get_bt_rfkill(localbt.bt_interface, LINUX_BT_RFKILL_TYPE_HARD)) {

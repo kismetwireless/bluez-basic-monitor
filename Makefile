@@ -10,10 +10,6 @@ MONITOR_OBJS = \
 MONITOR_BIN = bluez-monitor
 
 MGMT_OBJS = \
-	mgmtlib/bluetooth.c.o \
-	mgmtlib/hci.c.o \
-	mgmtlib/sdp.c.o \
-	mgmtlib/uuid.c.o \
 	linux_bt_rfkill.c.o \
 	simple_ringbuf_c.c.o \
 	bluez-mgmtsock.c.o
@@ -34,10 +30,12 @@ $(MGMT_BIN):	$(MGMT_OBJS) $(patsubst %c.o,%c.d,$(MGMT_OBJS))
 		$(LD) $(LDFLAGS) -o $(MGMT_BIN) $(MGMT_OBJS) $(LIBS) 
 
 clean:
-	@rm *.o
-	@rm *.d
-	@rm gdbus/*.o
-	@rm gdbus/*.d
+	@rm -f *.o
+	@rm -f *.d
+	@rm -f gdbus/*.o
+	@rm -f gdbus/*.d
+	@rm -f mgmtlib/*.o
+	@rm -f mgmtlib/*.d
 
 %.c.o:	%.c
 %.c.o : %.c %.c.d

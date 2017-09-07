@@ -255,6 +255,25 @@ void evt_controller_discovering(local_bluetooth_t *localbt, uint16_t len, const 
     fprintf(stderr, "DISCOVERY - %s - %s\n",
             dsc->discovering ? "enabled" : "disabled", dsc_type);
 
+    if (!dsc->discovering) {
+        fprintf(stderr, "DEBUG - Restarting discovery mode\n");
+        cmd_start_discovery(localbt);
+    }
+
+}
+
+void evt_device_found(local_bluetooth_t *localbt, uint16_t len, const void *param) {
+    struct mgmt_ev_device_found *dev = (struct mgmt_ev_device_found *) param;
+    char addr[BDADDR_STR_LEN];
+
+    if (len < sizeof(struct mgmt_ev_device_found)) {
+        fprintf(stderr, "DEBUG - insufficient data in device event\n");
+        return;
+    }
+
+    bdaddr_to_string(dev->addr.bdaddr.b, addr);
+
+    fprintf(stderr, "DEVICE - %s %d\n", addr, dev->rssi);
 }
 
 void handle_mgmt_response(local_bluetooth_t *localbt) {
@@ -317,9 +336,6 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
 
             ropcode = le16toh(crec->opcode);
 
-            fprintf(stderr, "COMMAND - command complete 0x%x hci%u len %u\n", 
-                    ropcode, rindex, rlength);
-
             /* Handle the different opcodes */
             switch (ropcode) {
                 case MGMT_OP_READ_INFO:
@@ -333,22 +349,27 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
                             crec->data);
                     break;
                 default:
-                    fprintf(stderr, "DEBUG - Unhandled command\n");
+                    fprintf(stderr, "COMMAND - unhandled command complete "
+                            "0x%x hci%u len %u\n", 
+                            ropcode, rindex, rlength);
             }
         } else if (ropcode == MGMT_EV_CMD_STATUS) {
             fprintf(stderr, "DEBUG - command status hci%u len %u\n", rindex, rlength);
         } else {
-            fprintf(stderr, "DEBUG - event 0x%x hci%u len %u\n", ropcode, rindex, rlength);
-
             switch (ropcode) {
                 case MGMT_EV_DISCOVERING:
                     evt_controller_discovering(localbt, 
                             rlength - sizeof(bluez_mgmt_command_t),
                             evt->param);
                     break;
+                case MGMT_EV_DEVICE_FOUND:
+                    evt_device_found(localbt,
+                            rlength - sizeof(bluez_mgmt_command_t),
+                            evt->param);
+                    break;
                 default:
-                    fprintf(stderr, "DEBUG - Unhandled event\n");
-
+                    fprintf(stderr, "DEBUG - Unhandled event 0x%x hci%u len %u\n", 
+                            ropcode, rindex, rlength);
             }
         }
 

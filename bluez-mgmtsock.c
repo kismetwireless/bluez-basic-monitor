@@ -445,6 +445,10 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
                             rlength - sizeof(bluez_mgmt_command_t),
                             evt->param);
                     break;
+                case MGMT_EV_INDEX_REMOVED:
+                    fprintf(stderr, "FATAL: hci%u removed\n", rindex);
+                    exit(1);
+                    break;
                 default:
                     fprintf(stderr, "DEBUG - Unhandled event 0x%x hci%u len %u\n", 
                             ropcode, rindex, rlength);

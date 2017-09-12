@@ -226,11 +226,13 @@ void resp_controller_info(local_bluetooth_t *localbt, uint8_t status, uint16_t l
     /* Is BREDR enabled? If not, turn it on */
     if ((supported & MGMT_SETTING_BREDR) && !(current & MGMT_SETTING_BREDR)) {
         cmd_enable_bredr(localbt);    
+        return;
     }
 
     /* Is BLE enabled? If not, turn it on */
     if ((supported & MGMT_SETTING_LE) && !(current & MGMT_SETTING_LE)) {
         cmd_enable_btle(localbt);    
+        return;
     }
 
     if (!(current & MGMT_SETTING_POWERED)) {
@@ -467,20 +469,22 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
                         exit(1);
                     }
                     break;
-                case MGMT_SETTING_BREDR:
+                case MGMT_OP_SET_BREDR:
                     if (crec->status != 0) {
                         fprintf(stderr, "FATAL: Enabling BREDR failed\n");
                         exit(1);
                     }
 
+                    fprintf(stderr, "DEBUG - BREDR setting complete, probing controller\n");
                     cmd_get_controller_info(localbt);
                     break;
-                case MGMT_SETTING_LE:
+                case MGMT_OP_SET_LE:
                     if (crec->status != 0) {
                         fprintf(stderr, "FATAL: Enabling LE failed\n");
                         exit(1);
                     }
 
+                    fprintf(stderr, "DEBUG - BLE setting complete, probing controller\n");
                     cmd_get_controller_info(localbt);
                     break;
                 default:

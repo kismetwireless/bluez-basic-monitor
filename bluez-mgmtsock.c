@@ -229,7 +229,7 @@ void resp_controller_info(local_bluetooth_t *localbt, uint8_t status, uint16_t l
     }
 
     /* Is BLE enabled? If not, turn it on */
-    if ((supported & MGMT_SETTING_BREDR) && !(current & MGMT_SETTING_BREDR)) {
+    if ((supported & MGMT_SETTING_LE) && !(current & MGMT_SETTING_LE)) {
         cmd_enable_btle(localbt);    
     }
 
@@ -460,6 +460,28 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
                     resp_controller_power(localbt, crec->status,
                             rlength - sizeof(struct mgmt_ev_cmd_complete),
                             crec->data);
+                    break;
+                case MGMT_OP_START_DISCOVERY:
+                    if (crec->status != 0) {
+                        fprintf(stderr, "FATAL: Discovery command failed\n");
+                        exit(1);
+                    }
+                    break;
+                case MGMT_SETTING_BREDR:
+                    if (crec->status != 0) {
+                        fprintf(stderr, "FATAL: Enabling BREDR failed\n");
+                        exit(1);
+                    }
+
+                    cmd_get_controller_info(localbt);
+                    break;
+                case MGMT_SETTING_LE:
+                    if (crec->status != 0) {
+                        fprintf(stderr, "FATAL: Enabling LE failed\n");
+                        exit(1);
+                    }
+
+                    cmd_get_controller_info(localbt);
                     break;
                 default:
                     fprintf(stderr, "COMMAND - unhandled command complete "

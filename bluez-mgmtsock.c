@@ -188,6 +188,8 @@ void resp_controller_info(local_bluetooth_t *localbt, uint8_t status, uint16_t l
     const struct mgmt_rp_read_info *rp = (struct mgmt_rp_read_info *) param;
     char bdaddr[BDADDR_STR_LEN];
 
+    uint32_t current, supported;
+
     if (len < sizeof(struct mgmt_rp_read_info)) {
         fprintf(stderr, "DEBUG - insufficient data in controller info\n");
         return;
@@ -197,15 +199,18 @@ void resp_controller_info(local_bluetooth_t *localbt, uint8_t status, uint16_t l
 
     fprintf(stderr, "INTERFACE - Got interface info for %s\n", bdaddr);
 
+    current = le32toh(rp->current_settings);
+    supported = le32toh(rp->supported_settings);
+
     /* Figure out if we support BDR/EDR and BTLE */
-    if (rp->supported_settings & MGMT_SETTING_BREDR) {
+    if (supported & MGMT_SETTING_BREDR) {
         fprintf(stderr, "    Supports BR/EDR\n");
     } else {
         fprintf(stderr, "    No EDR/SDR support\n");
         localbt->scan_type &= ~SCAN_TYPE_BREDR;
     }
 
-    if (rp->supported_settings & MGMT_SETTING_LE) {
+    if (supported & MGMT_SETTING_LE) {
         fprintf(stderr, "    Supports BTLE\n");
     } else {
         fprintf(stderr, "    No BTLE support\n");
@@ -213,24 +218,22 @@ void resp_controller_info(local_bluetooth_t *localbt, uint8_t status, uint16_t l
     }
 
     /* Is it currently powered? */
-    if (rp->current_settings & MGMT_SETTING_POWERED)
+    if (current & MGMT_SETTING_POWERED)
         fprintf(stderr, "    Powered\n");
     else
         fprintf(stderr, "    Down\n");
 
     /* Is BREDR enabled? If not, turn it on */
-    if ((rp->supported_settings & MGMT_SETTING_BREDR) &&
-            !(rp->current_settings & MGMT_SETTING_BREDR)) {
+    if ((supported & MGMT_SETTING_BREDR) && !(current & MGMT_SETTING_BREDR)) {
         cmd_enable_bredr(localbt);    
     }
 
     /* Is BLE enabled? If not, turn it on */
-    if ((rp->supported_settings & MGMT_SETTING_BREDR) &&
-            !(rp->current_settings & MGMT_SETTING_BREDR)) {
+    if ((supported & MGMT_SETTING_BREDR) && !(current & MGMT_SETTING_BREDR)) {
         cmd_enable_btle(localbt);    
     }
 
-    if (!(rp->current_settings & MGMT_SETTING_POWERED)) {
+    if (!(current & MGMT_SETTING_POWERED)) {
         /* If the interface is off, turn it on */
         fprintf(stderr, "DEBUG - Powering on interface\n");
         cmd_enable_controller(localbt);
@@ -242,14 +245,18 @@ void resp_controller_info(local_bluetooth_t *localbt, uint8_t status, uint16_t l
 
 void resp_controller_power(local_bluetooth_t *localbt, uint8_t status, uint16_t len,
         const void *param) {
-    uint32_t *settings = (uint32_t *) param;
+    uint32_t *rsettings = (uint32_t *) param;
+   
+    uint32_t settings;
 
     if (len < sizeof(uint32_t)) {
         fprintf(stderr, "DEBUG - insufficient data in controller power\n");
         return;
     }
 
-    if (*settings & MGMT_SETTING_POWERED) {
+    settings = le32toh(*rsettings);
+
+    if (settings & MGMT_SETTING_POWERED) {
         fprintf(stderr, "DEBUG - Interface powered on\n");
 
         /* Initiate scanning mode */

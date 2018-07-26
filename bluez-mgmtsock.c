@@ -37,6 +37,8 @@
 #include "linux_bt_rfkill.h"
 #include "simple_ringbuf_c.h"
 
+#include "btsnoop.h"
+
 typedef struct {
     /* Target interface */
     char *bt_interface;
@@ -51,10 +53,12 @@ typedef struct {
 
     /* bluez management interface socket */
     int mgmt_fd;
+    int monitor_fd;
     unsigned int devid;
 
     /* Read ringbuf */
     kis_simple_ringbuf_t *read_rbuf;
+    kis_simple_ringbuf_t *read_monitor_rbuf;
 
     /* Scanning type */
     uint8_t scan_type;
@@ -72,6 +76,36 @@ typedef struct {
     uint8_t param[0];
 } bluez_mgmt_command_t;
 
+/* Device discovered inner packet */
+typedef struct {
+    uint8_t macaddr[6];
+    uint8_t rssi;
+    uint32_t flags;
+    uint16_t data_len;
+    uint8_t data[0];
+} bluez_monitor_discovered_t;
+
+static const struct {
+	uint8_t bit;
+	const char *str;
+} eir_flags_table[] = {
+	{ 0, "LE Limited Discoverable Mode"		},
+	{ 1, "LE General Discoverable Mode"		},
+	{ 2, "BR/EDR Not Supported"			},
+	{ 3, "Simultaneous LE and BR/EDR (Controller)"	},
+	{ 4, "Simultaneous LE and BR/EDR (Host)"	},
+	{ }
+};
+
+static const struct {
+	uint8_t bit;
+	const char *str;
+} mgmt_address_type_table[] = {
+	{  0, "BR/EDR"		},
+	{  1, "LE Public"	},
+	{  2, "LE Random"	},
+	{ }
+};
 
 /* Convert an address to a string; string must hold at least 18 bytes */
 #define BDADDR_STR_LEN      18
@@ -103,6 +137,31 @@ int mgmt_connect() {
     }
     
     return fd;
+}
+
+/* Connect to the bluez management system, monitor channel */
+int monitor_connect() {
+    int fd;
+    struct sockaddr_hci addr;
+
+    if ((fd = socket(PF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC | SOCK_NONBLOCK, 
+                    BTPROTO_HCI)) < 0) {
+        return -errno;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.hci_family = AF_BLUETOOTH;
+    addr.hci_dev = HCI_DEV_NONE;
+    addr.hci_channel = HCI_CHANNEL_MONITOR;
+
+    if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+        int err = -errno;
+        close(fd);
+        return err;
+    }
+    
+    return fd;
+
 }
 
 /* Write a request to the management socket ringbuffer, serviced by the
@@ -521,6 +580,365 @@ void handle_mgmt_response(local_bluetooth_t *localbt) {
     }
 }
 
+void handle_eir(local_bluetooth_t *localbt, uint16_t eir_len, 
+        const uint8_t *eir_data, unsigned int le) {
+    uint16_t len;
+
+	if (eir_len == 0)
+		return;
+
+	while (len < eir_len - 1) {
+		uint8_t field_len = eir_data[0];
+		const uint8_t *data = &eir_data[2];
+		uint8_t data_len;
+		char name[239], label[100];
+		uint8_t flags, mask;
+		int i;
+
+		if (field_len == 0)
+			break;
+
+		len += field_len + 1;
+
+		/* Do not continue EIR Data parsing if got incorrect length */
+		if (len > eir_len) {
+			len -= field_len + 1;
+			break;
+		}
+
+		data_len = field_len - 1;
+
+		switch (eir_data[1]) {
+		case BT_EIR_FLAGS:
+			flags = *data;
+			mask = flags;
+
+			print_field("Flags: 0x%2.2x", flags);
+
+			for (i = 0; eir_flags_table[i].str; i++) {
+				if (flags & (1 << eir_flags_table[i].bit)) {
+					print_field("  %s",
+							eir_flags_table[i].str);
+					mask &= ~(1 << eir_flags_table[i].bit);
+				}
+			}
+
+			if (mask)
+				print_text(COLOR_UNKNOWN_SERVICE_CLASS,
+					"  Unknown flags (0x%2.2x)", mask);
+			break;
+
+		case BT_EIR_UUID16_SOME:
+			if (data_len < sizeof(uint16_t))
+				break;
+			print_uuid16_list("16-bit Service UUIDs (partial)",
+							data, data_len);
+			break;
+
+		case BT_EIR_UUID16_ALL:
+			if (data_len < sizeof(uint16_t))
+				break;
+			print_uuid16_list("16-bit Service UUIDs (complete)",
+							data, data_len);
+			break;
+
+		case BT_EIR_UUID32_SOME:
+			if (data_len < sizeof(uint32_t))
+				break;
+			print_uuid32_list("32-bit Service UUIDs (partial)",
+							data, data_len);
+			break;
+
+		case BT_EIR_UUID32_ALL:
+			if (data_len < sizeof(uint32_t))
+				break;
+			print_uuid32_list("32-bit Service UUIDs (complete)",
+							data, data_len);
+			break;
+
+		case BT_EIR_UUID128_SOME:
+			if (data_len < 16)
+				break;
+			print_uuid128_list("128-bit Service UUIDs (partial)",
+								data, data_len);
+			break;
+
+		case BT_EIR_UUID128_ALL:
+			if (data_len < 16)
+				break;
+			print_uuid128_list("128-bit Service UUIDs (complete)",
+								data, data_len);
+			break;
+
+		case BT_EIR_NAME_SHORT:
+			memset(name, 0, sizeof(name));
+			memcpy(name, data, data_len);
+			print_field("Name (short): %s", name);
+			break;
+
+		case BT_EIR_NAME_COMPLETE:
+			memset(name, 0, sizeof(name));
+			memcpy(name, data, data_len);
+			print_field("Name (complete): %s", name);
+			break;
+
+		case BT_EIR_TX_POWER:
+			if (data_len < 1)
+				break;
+			print_field("TX power: %d dBm", (int8_t) *data);
+			break;
+
+		case BT_EIR_CLASS_OF_DEV:
+			if (data_len < 3)
+				break;
+			print_dev_class(data);
+			break;
+
+		case BT_EIR_SSP_HASH_P192:
+			if (data_len < 16)
+				break;
+			print_hash_p192(data);
+			break;
+
+		case BT_EIR_SSP_RANDOMIZER_P192:
+			if (data_len < 16)
+				break;
+			print_randomizer_p192(data);
+			break;
+
+		case BT_EIR_DEVICE_ID:
+			/* SMP TK has the same value as Device ID */
+			if (le)
+				print_hex_field("SMP TK", data, data_len);
+			else if (data_len >= 8)
+				print_device_id(data, data_len);
+			break;
+
+		case BT_EIR_SMP_OOB_FLAGS:
+			print_field("SMP OOB Flags: 0x%2.2x", *data);
+			break;
+
+		case BT_EIR_SLAVE_CONN_INTERVAL:
+			if (data_len < 4)
+				break;
+			print_field("Slave Conn. Interval: 0x%4.4x - 0x%4.4x",
+							get_le16(&data[0]),
+							get_le16(&data[2]));
+			break;
+
+		case BT_EIR_SERVICE_UUID16:
+			if (data_len < sizeof(uint16_t))
+				break;
+			print_uuid16_list("16-bit Service UUIDs",
+							data, data_len);
+			break;
+
+		case BT_EIR_SERVICE_UUID128:
+			if (data_len < 16)
+				break;
+			print_uuid128_list("128-bit Service UUIDs",
+							data, data_len);
+			break;
+
+		case BT_EIR_SERVICE_DATA:
+			if (data_len < 2)
+				break;
+			sprintf(label, "Service Data (UUID 0x%4.4x)",
+							get_le16(&data[0]));
+			print_hex_field(label, &data[2], data_len - 2);
+			break;
+
+		case BT_EIR_RANDOM_ADDRESS:
+			if (data_len < 6)
+				break;
+			print_addr("Random Address", data, 0x01);
+			break;
+
+		case BT_EIR_PUBLIC_ADDRESS:
+			if (data_len < 6)
+				break;
+			print_addr("Public Address", data, 0x00);
+			break;
+
+		case BT_EIR_GAP_APPEARANCE:
+			if (data_len < 2)
+				break;
+			print_appearance(get_le16(data));
+			break;
+
+		case BT_EIR_SSP_HASH_P256:
+			if (data_len < 16)
+				break;
+			print_hash_p256(data);
+			break;
+
+		case BT_EIR_SSP_RANDOMIZER_P256:
+			if (data_len < 16)
+				break;
+			print_randomizer_p256(data);
+			break;
+
+		case BT_EIR_3D_INFO_DATA:
+			print_hex_field("3D Information Data", data, data_len);
+			if (data_len < 2)
+				break;
+
+			flags = *data;
+			mask = flags;
+
+			print_field("  Features: 0x%2.2x", flags);
+
+			for (i = 0; eir_3d_table[i].str; i++) {
+				if (flags & (1 << eir_3d_table[i].bit)) {
+					print_field("    %s",
+							eir_3d_table[i].str);
+					mask &= ~(1 << eir_3d_table[i].bit);
+				}
+			}
+
+			if (mask)
+				print_text(COLOR_UNKNOWN_FEATURE_BIT,
+					"      Unknown features (0x%2.2x)", mask);
+
+			print_field("  Path Loss Threshold: %d", data[1]);
+			break;
+
+		case BT_EIR_MANUFACTURER_DATA:
+			if (data_len < 2)
+				break;
+			print_manufacturer_data(data, data_len);
+			break;
+
+		default:
+			sprintf(label, "Unknown EIR field 0x%2.2x", eir[1]);
+			print_hex_field(label, data, data_len);
+			break;
+		}
+
+		eir += field_len + 1;
+	}
+
+	if (len < eir_len && eir[0] != 0)
+		packet_hexdump(eir, eir_len - len);
+}
+
+void handle_monitor_device_discovered(local_bluetooth_t *localbt, uint16_t len,
+        const void *param) {
+    bluez_monitor_discovered_t *discovery = (bluez_monitor_discovered_t *) param;
+
+    if (len < sizeof(bluez_monitor_discovered_t)) {
+        fprintf(stderr, "ERROR - Invalid discovered device size\n");
+        return;
+    }
+
+    printf("    MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+            discovery->macaddr[5],
+            discovery->macaddr[4],
+            discovery->macaddr[3],
+            discovery->macaddr[2],
+            discovery->macaddr[1],
+            discovery->macaddr[0]);
+    printf("   RSSI: %d\n", discovery->rssi);
+
+}
+
+void handle_monitor_ctrl_event(local_bluetooth_t *localbt, uint16_t len, 
+        const void *param) {
+
+    uint16_t ctl_opcode;
+
+	if (len < 4) {
+        fprintf(stderr, "ERROR - Invalid ctrl event size\n");
+        return;
+    }
+
+    /* We don't care about the cookie */
+
+    param += 4;
+    len -= 4;
+
+    if (len < 2) {
+        fprintf(stderr, "ERROR - invalid ctrl event size\n");
+        return;
+    }
+
+    memcpy(&ctl_opcode, param, 2);
+
+    ctl_opcode = le16toh(ctl_opcode);
+
+    param += 2;
+    len -= 2;
+
+    if (ctl_opcode == 0x12) {
+        printf("    CTRL - device found\n");
+        handle_monitor_device_discovered(localbt, len, param);
+    } else {
+        printf("    CTRL OPCODE %x\n", ctl_opcode);
+    }
+
+}
+
+void handle_monitor_response(local_bluetooth_t *localbt) {
+    /* Top-level command */
+    bluez_mgmt_command_t *evt;
+
+    /* Buffer loading sizes */
+    size_t bufsz;
+    size_t peekedsz;
+
+    /* Interpreted codes from response */
+    uint16_t ropcode;
+    uint16_t rlength;
+    uint16_t rindex;
+
+    while ((bufsz = kis_simple_ringbuf_used(localbt->read_monitor_rbuf)) >= 
+            sizeof(bluez_mgmt_command_t)) {
+        evt = (bluez_mgmt_command_t *) malloc(bufsz);
+
+        if ((peekedsz = kis_simple_ringbuf_peek(localbt->read_monitor_rbuf, 
+                        (void *) evt, bufsz)) < sizeof(bluez_mgmt_command_t)) {
+            fprintf(stderr, "DEBUG - peeked less than we need for minimum record\n");
+            free(evt);
+            return;
+        }
+
+        ropcode = le16toh(evt->opcode);
+        rindex = le16toh(evt->index);
+        rlength = le16toh(evt->length);
+
+        if (rlength + sizeof(bluez_mgmt_command_t) > peekedsz) {
+            fprintf(stderr, "DEBUG - didn't peek enough for this packet\n");
+            free(evt);
+            return;
+        }
+
+        /* Consume this object from the buffer */
+        kis_simple_ringbuf_read(localbt->read_monitor_rbuf, NULL, 
+                sizeof(bluez_mgmt_command_t) + rlength);
+
+        /* Ignore events not for us */
+        if (rindex != localbt->devid) {
+            fprintf(stderr, "DEBUG - Got information about an interface we don't care "
+                    "about (hci%u)\n", rindex);
+            continue;
+        }
+
+        if (ropcode == 2) {
+            printf("COMMAND\n");
+        } else if (ropcode == 16) {
+            printf("CTRLCOMMAND\n");
+        } else if (ropcode == 17) {
+            printf("CTRLEVENT\n");
+            handle_monitor_ctrl_event(localbt, rlength, evt->param);
+        } else {
+            printf("UNKNOWN opcode %u (don't care)\n", ropcode);
+        }
+
+        /* Dump the temp object */
+        free(evt);
+    }
+}
+
 int main(int argc, char *argv[]) {
     local_bluetooth_t localbt = {
         .bt_interface = NULL,
@@ -530,6 +948,7 @@ int main(int argc, char *argv[]) {
         .devid = 0,
         .mgmt_fd = 0,
         .read_rbuf = NULL,
+        .read_monitor_rbuf = NULL,
         .scan_type = SCAN_TYPE_DUAL,
     };
 
@@ -616,24 +1035,47 @@ int main(int argc, char *argv[]) {
 
     fprintf(stderr, "DEBUG - management fd %d\n", localbt.mgmt_fd);
 
+    if ((localbt.monitor_fd = monitor_connect()) < 0) {
+        fprintf(stderr, "FATAL - could not connect management socket: %s\n",
+                strerror(localbt.mgmt_fd * -1));
+        exit(1);
+    }
+
+    fprintf(stderr, "DEBUG - monitor fd %d\n", localbt.mgmt_fd);
+
     /* Set up our ringbuffers */
     localbt.read_rbuf = kis_simple_ringbuf_create(4096);
 
     if (localbt.read_rbuf == NULL) {
-        fprintf(stderr, "FATAL: Could not allocate ringbuffers\n");
+        fprintf(stderr, "FATAL: Could not allocate ringbuffer\n");
+        exit(1);
+    }
+
+    localbt.read_monitor_rbuf = kis_simple_ringbuf_create(4096);
+
+    if (localbt.read_monitor_rbuf == NULL) {
+        fprintf(stderr, "FATAL: Could not allocate monitor ringbuffer\n");
         exit(1);
     }
 
     fprintf(stderr, "DEBUG - sending controller info command\n");
     cmd_get_controller_info(&localbt);
 
+    int max_fd = 0;
+
     while (1) {
         FD_ZERO(&rset);
 
         /* Always set read buffer */
         FD_SET(localbt.mgmt_fd, &rset);
+        FD_SET(localbt.monitor_fd, &rset);
 
-        if (select(localbt.mgmt_fd + 1, &rset, NULL, NULL, NULL) < 0) {
+        if (max_fd < localbt.mgmt_fd)
+            max_fd = localbt.mgmt_fd;
+        if (max_fd < localbt.monitor_fd)
+            max_fd = localbt.monitor_fd;
+
+        if (select(max_fd + 1, &rset, NULL, NULL, NULL) < 0) {
             if (errno != EINTR && errno != EAGAIN) {
                 fprintf(stderr, "FATAL: Select failed %s\n", strerror(errno));
                 exit(1);
@@ -665,6 +1107,32 @@ int main(int argc, char *argv[]) {
                 }
 
                 handle_mgmt_response(&localbt);
+            }
+        }
+
+        if (FD_ISSET(localbt.monitor_fd, &rset)) {
+            while (kis_simple_ringbuf_available(localbt.read_monitor_rbuf)) {
+                ssize_t amt_read;
+                size_t amt_buffered;
+                uint8_t rbuf[512];
+
+                if ((amt_read = read(localbt.monitor_fd, rbuf, 512)) <= 0) {
+                    if (errno != EINTR && errno != EAGAIN) {
+                        fprintf(stderr, "FATAL: read failed %s\n", strerror(errno));
+                        exit(1);
+                    } else {
+                        break;
+                    }
+                }
+
+                amt_buffered = kis_simple_ringbuf_write(localbt.read_monitor_rbuf, rbuf, amt_read);
+
+                if ((ssize_t) amt_buffered != amt_read) {
+                    fprintf(stderr, "FATAL: failed to put read data in ringbuf\n");
+                    exit(1);
+                }
+
+                handle_monitor_response(&localbt);
             }
         }
 
